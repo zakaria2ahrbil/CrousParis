@@ -100,7 +100,10 @@ POSTAL_RE = re.compile(r"(\d{5})\s+[A-ZÀ-ÜŒ]")
 def fetch_page(page_num: int) -> BeautifulSoup:
     resp = requests.get(BASE_URL, params={"page": page_num}, headers=HEADERS, timeout=20)
     resp.raise_for_status()
-    return BeautifulSoup(resp.text, "html.parser")
+    # Parse raw bytes so BeautifulSoup can sniff the correct encoding (UTF-8)
+    # from the page's own meta tags, instead of trusting a possibly-wrong
+    # encoding guess from response headers (which was causing mojibake).
+    return BeautifulSoup(resp.content, "html.parser")
 
 
 def get_last_page(soup: BeautifulSoup) -> int:
