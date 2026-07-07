@@ -30,7 +30,7 @@ BASE_URL = f"https://trouverunlogement.lescrous.fr/tools/{TOOL_ID}/search"
 # All of Île-de-France, so nothing gets filtered out before you see it.
 IDF_POSTAL_PREFIXES = ["75", "77", "78", "91", "92", "93", "94", "95"]
 
-MAX_PRICE = 600  # euros/month
+MAX_PRICE = None  # no price cap — show everything in IDF, you decide
 
 CHECK_INTERVAL_SECONDS = 300  # only used in local/loop mode, not GitHub Actions
 
@@ -241,9 +241,9 @@ def build_message(listing) -> str:
     )
 
 
-def maybe_send_heartbeat(total_scraped: int, total_matching: int):
-    """Send a quiet 'still watching' ping at most once per HEARTBEAT_INTERVAL_SECONDS,
-    so you know the bot is alive even when nothing new has appeared."""
+def maybe_send_heartbeat(matching: list):
+    """Send a 'still watching' ping at most once per HEARTBEAT_INTERVAL_SECONDS,
+    listing every current IDF listing (not just new ones) so you can decide."""
     now = time.time()
     last = 0.0
     if HEARTBEAT_FILE.exists():
@@ -255,11 +255,15 @@ def maybe_send_heartbeat(total_scraped: int, total_matching: int):
     if now - last < HEARTBEAT_INTERVAL_SECONDS:
         return
 
-    send_telegram(
-        f"✅ Bot actif — {total_scraped} logements au total, "
-        f"{total_matching} correspondent à tes critères en ce moment. "
-        f"Rien de nouveau pour l'instant."
-    )
+    if not matching:
+        send_telegram("✅ Bot actif — aucun logement en Île-de-France pour l'instant.")
+    else:
+        lines = [f"✅ Bot actif — {len(matching)} logement(s) actuellement en IDF :\n"]
+        for l in matching:
+            pref = get_preference(l["postal"])
+            lines.append(f"• {l['name']} — {l['price_text']} — {l['postal']} ({pref})\n  {l['url']}")
+        send_telegram("\n".join(lines))
+
     HEARTBEAT_FILE.write_text(str(now))
 
 
@@ -285,7 +289,7 @@ def run_once(seen_ids: set) -> set:
         send_telegram(msg)
 
     if not new_ones:
-        maybe_send_heartbeat(len(listings), len(matching))
+        maybe_send_heartbeat(matching)
 
     return {l["id"] for l in matching}
 
