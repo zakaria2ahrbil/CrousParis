@@ -35,6 +35,8 @@ MAX_PRICE = 405  # euros/month
 CHECK_INTERVAL_SECONDS = 300  # only used in local/loop mode, not GitHub Actions
 
 STATE_FILE = Path(os.environ.get("STATE_FILE", "crous_seen_ids.json"))
+HEARTBEAT_FILE = Path(os.environ.get("HEARTBEAT_FILE", "crous_last_heartbeat.txt"))
+HEARTBEAT_INTERVAL_SECONDS = 3600  # send an "I'm alive" ping at most once per hour
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "PUT_YOUR_CHAT_ID_HERE")
@@ -228,6 +230,28 @@ def build_message(listing) -> str:
     )
 
 
+def maybe_send_heartbeat(total_scraped: int, total_matching: int):
+    """Send a quiet 'still watching' ping at most once per HEARTBEAT_INTERVAL_SECONDS,
+    so you know the bot is alive even when nothing new has appeared."""
+    now = time.time()
+    last = 0.0
+    if HEARTBEAT_FILE.exists():
+        try:
+            last = float(HEARTBEAT_FILE.read_text().strip())
+        except ValueError:
+            last = 0.0
+
+    if now - last < HEARTBEAT_INTERVAL_SECONDS:
+        return
+
+    send_telegram(
+        f"✅ Bot actif — {total_scraped} logements au total, "
+        f"{total_matching} correspondent à tes critères en ce moment. "
+        f"Rien de nouveau pour l'instant."
+    )
+    HEARTBEAT_FILE.write_text(str(now))
+
+
 def run_once(seen_ids: set) -> set:
     listings = get_all_listings()
     print(f"[debug] total listings scraped: {len(listings)}")
@@ -242,6 +266,9 @@ def run_once(seen_ids: set) -> set:
         msg = build_message(listing)
         print(msg)
         send_telegram(msg)
+
+    if not new_ones:
+        maybe_send_heartbeat(len(listings), len(matching))
 
     return {l["id"] for l in matching}
 
