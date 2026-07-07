@@ -107,16 +107,21 @@ class SiteOverloadedError(Exception):
     pass
 
 
-def fetch_page(page_num: int) -> BeautifulSoup:
-    resp = requests.get(BASE_URL, params={"page": page_num}, headers=HEADERS, timeout=20)
-    resp.raise_for_status()
-    # Parse raw bytes so BeautifulSoup can sniff the correct encoding (UTF-8)
-    # from the page's own meta tags, instead of trusting a possibly-wrong
-    # encoding guess from response headers (which was causing mojibake).
-    soup = BeautifulSoup(resp.content, "html.parser")
-    if WAIT_SCREEN_TEXT in soup.get_text().lower():
-        raise SiteOverloadedError("Site returned the 'trop nombreux' overload screen")
-    return soup
+def fetch_page(page_num: int, retries: int = 3) -> BeautifulSoup:
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            resp = requests.get(BASE_URL, params={"page": page_num}, headers=HEADERS, timeout=40)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.content, "html.parser")
+            if WAIT_SCREEN_TEXT in soup.get_text().lower():
+                raise SiteOverloadedError("Site returned the 'trop nombreux' overload screen")
+            return soup
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            print(f"[debug] fetch attempt {attempt + 1}/{retries} failed: {e}")
+            time.sleep(5)
+    raise last_exc
 
 
 def get_last_page(soup: BeautifulSoup) -> int:
@@ -288,6 +293,9 @@ def run_once(seen_ids: set) -> set:
     except SiteOverloadedError:
         print("[debug] Site is overloaded ('trop nombreux' screen) — skipping this check, "
               "state unchanged. This is NOT a real 0 results.")
+        return seen_ids
+    except requests.exceptions.RequestException as e:
+        print(f"[debug] Network error after retries ({e}) — skipping this check, state unchanged.")
         return seen_ids
 
     print(f"[debug] total listings scraped: {len(listings)}")
