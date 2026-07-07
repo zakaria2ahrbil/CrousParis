@@ -241,9 +241,9 @@ def build_message(listing) -> str:
     )
 
 
-def maybe_send_heartbeat(matching: list):
+def maybe_send_heartbeat(all_listings: list, matching: list):
     """Send a 'still watching' ping at most once per HEARTBEAT_INTERVAL_SECONDS,
-    listing every current IDF listing (not just new ones) so you can decide."""
+    listing current IDF listings first, then a full-France list as a backup view."""
     now = time.time()
     last = 0.0
     if HEARTBEAT_FILE.exists():
@@ -255,14 +255,29 @@ def maybe_send_heartbeat(matching: list):
     if now - last < HEARTBEAT_INTERVAL_SECONDS:
         return
 
+    lines = ["✅ Bot actif\n"]
+
     if not matching:
-        send_telegram("✅ Bot actif — aucun logement en Île-de-France pour l'instant.")
+        lines.append("Île-de-France : aucun logement pour l'instant.\n")
     else:
-        lines = [f"✅ Bot actif — {len(matching)} logement(s) actuellement en IDF :\n"]
+        lines.append(f"Île-de-France ({len(matching)}) :")
         for l in matching:
             pref = get_preference(l["postal"])
             lines.append(f"• {l['name']} — {l['price_text']} — {l['postal']} ({pref})\n  {l['url']}")
-        send_telegram("\n".join(lines))
+        lines.append("")
+
+    if not all_listings:
+        lines.append("France entière : aucun logement pour l'instant.")
+    else:
+        lines.append(f"France entière ({len(all_listings)}) — liste complète en backup :")
+        for l in all_listings:
+            lines.append(f"• {l['name']} — {l['price_text']} — {l['postal']} ({l['address']})\n  {l['url']}")
+
+    # Telegram messages have a ~4096 char limit — split into chunks if needed
+    full_text = "\n".join(lines)
+    chunk_size = 3800
+    for i in range(0, len(full_text), chunk_size):
+        send_telegram(full_text[i:i + chunk_size])
 
     HEARTBEAT_FILE.write_text(str(now))
 
@@ -289,7 +304,7 @@ def run_once(seen_ids: set) -> set:
         send_telegram(msg)
 
     if not new_ones:
-        maybe_send_heartbeat(matching)
+        maybe_send_heartbeat(listings, matching)
 
     return {l["id"] for l in matching}
 
