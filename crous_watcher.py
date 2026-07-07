@@ -99,13 +99,24 @@ PRICE_RE = re.compile(r"([\d]+(?:,\d+)?)\s*€")
 POSTAL_RE = re.compile(r"(\d{5})\s+[A-ZÀ-ÜŒ]")
 
 
+WAIT_SCREEN_TEXT = "trop nombreux"
+
+
+class SiteOverloadedError(Exception):
+    """Raised when the site shows its 'trop nombreux' overload screen instead of real listings."""
+    pass
+
+
 def fetch_page(page_num: int) -> BeautifulSoup:
     resp = requests.get(BASE_URL, params={"page": page_num}, headers=HEADERS, timeout=20)
     resp.raise_for_status()
     # Parse raw bytes so BeautifulSoup can sniff the correct encoding (UTF-8)
     # from the page's own meta tags, instead of trusting a possibly-wrong
     # encoding guess from response headers (which was causing mojibake).
-    return BeautifulSoup(resp.content, "html.parser")
+    soup = BeautifulSoup(resp.content, "html.parser")
+    if WAIT_SCREEN_TEXT in soup.get_text().lower():
+        raise SiteOverloadedError("Site returned the 'trop nombreux' overload screen")
+    return soup
 
 
 def get_last_page(soup: BeautifulSoup) -> int:
@@ -253,7 +264,13 @@ def maybe_send_heartbeat(total_scraped: int, total_matching: int):
 
 
 def run_once(seen_ids: set) -> set:
-    listings = get_all_listings()
+    try:
+        listings = get_all_listings()
+    except SiteOverloadedError:
+        print("[debug] Site is overloaded ('trop nombreux' screen) — skipping this check, "
+              "state unchanged. This is NOT a real 0 results.")
+        return seen_ids
+
     print(f"[debug] total listings scraped: {len(listings)}")
     if listings:
         print(f"[debug] sample listing: {listings[0]}")
