@@ -24,13 +24,13 @@ from bs4 import BeautifulSoup
 
 # ---------------- CONFIG ----------------
 
-TOOL_ID = 45  # 2026-2027 campaign. Use 42 for the current year's tool.
+TOOL_ID = 47  # confirmed from the live site's "année prochaine 2026-2027" link
 BASE_URL = f"https://trouverunlogement.lescrous.fr/tools/{TOOL_ID}/search"
 
 # All of Île-de-France, so nothing gets filtered out before you see it.
 IDF_POSTAL_PREFIXES = ["75", "77", "78", "91", "92", "93", "94", "95"]
 
-MAX_PRICE = 600  # euros/month
+MAX_PRICE = 405  # euros/month
 
 CHECK_INTERVAL_SECONDS = 300  # only used in local/loop mode, not GitHub Actions
 
@@ -94,7 +94,7 @@ def get_preference(postal: str) -> str:
 
 LISTING_LINK_RE = re.compile(rf"/tools/{TOOL_ID}/accommodations/(\d+)")
 PRICE_RE = re.compile(r"([\d]+(?:,\d+)?)\s*€")
-POSTAL_RE = re.compile(r"\b(\d{5})\b")
+POSTAL_RE = re.compile(r"(\d{5})\s+[A-ZÀ-ÜŒ]")
 
 
 def fetch_page(page_num: int) -> BeautifulSoup:
@@ -104,46 +104,55 @@ def fetch_page(page_num: int) -> BeautifulSoup:
 
 
 def get_last_page(soup: BeautifulSoup) -> int:
+    # The site shows a "Dernière page" link with an href containing page=N
     max_page = 1
-    for a in soup.find_all("a", href=re.compile(r"page=(\d+)")):
+    for a in soup.find_all("a", class_="fr-pagination__link--last", href=True):
         m = re.search(r"page=(\d+)", a["href"])
         if m:
             max_page = max(max_page, int(m.group(1)))
     return max_page
 
 
+def parse_price_range(price_text: str):
+    """Handles both 'X €' and 'de X à Y €' formats. Returns (min_price, max_price)."""
+    numbers = re.findall(r"[\d]+(?:,\d+)?", price_text)
+    numbers = [float(n.replace(",", ".")) for n in numbers]
+    if not numbers:
+        return None, None
+    return min(numbers), max(numbers)
+
+
 def parse_listings(soup: BeautifulSoup):
     listings = []
-    seen_on_page = set()
-    for a in soup.find_all("a", href=LISTING_LINK_RE):
-        m = LISTING_LINK_RE.search(a["href"])
-        listing_id = m.group(1)
-        if listing_id in seen_on_page:
+    for card in soup.select("div.fr-card"):
+        title_link = card.select_one("h3.fr-card__title a[href]")
+        if not title_link:
             continue
-        seen_on_page.add(listing_id)
 
-        name = a.get_text(strip=True)
+        m = LISTING_LINK_RE.search(title_link["href"])
+        if not m:
+            continue
+        listing_id = m.group(1)
+        name = title_link.get_text(strip=True)
 
-        card = a
-        for _ in range(4):
-            if card.parent is None:
-                break
-            card = card.parent
-        card_text = card.get_text(" ", strip=True)
-
-        price_match = PRICE_RE.search(card_text)
-        price = price_match.group(1).replace(",", ".") if price_match else None
-
-        postal_match = POSTAL_RE.search(card_text)
+        desc_el = card.select_one("p.fr-card__desc")
+        address_text = desc_el.get_text(strip=True) if desc_el else ""
+        postal_match = POSTAL_RE.search(address_text)
         postal = postal_match.group(1) if postal_match else None
+
+        price_el = card.select_one("ul.fr-badges-group p.fr-badge")
+        price_text = price_el.get_text(strip=True) if price_el else ""
+        min_price, max_price = parse_price_range(price_text)
 
         listings.append({
             "id": listing_id,
             "name": name,
             "url": f"https://trouverunlogement.lescrous.fr/tools/{TOOL_ID}/accommodations/{listing_id}",
-            "price": float(price) if price else None,
+            "min_price": min_price,
+            "max_price": max_price,
+            "price_text": price_text,
+            "address": address_text,
             "postal": postal,
-            "raw_text": card_text,
         })
     return listings
 
@@ -166,7 +175,9 @@ def matches_criteria(listing) -> bool:
         return False
     if not any(listing["postal"].startswith(p) for p in IDF_POSTAL_PREFIXES):
         return False
-    if MAX_PRICE is not None and listing["price"] is not None and listing["price"] > MAX_PRICE:
+    # Use min_price: if ANY room in this residence could be under budget, surface it.
+    # The alert shows the full range so you can judge for yourself.
+    if MAX_PRICE is not None and listing["min_price"] is not None and listing["min_price"] > MAX_PRICE:
         return False
     return True
 
@@ -206,7 +217,8 @@ def build_message(listing) -> str:
     return (
         f"🏠 Nouveau logement CROUS !\n"
         f"{listing['name']}\n"
-        f"{listing['price']}€ — {listing['postal']}\n"
+        f"{listing['address']}\n"
+        f"Prix : {listing['price_text']}\n"
         f"Préférence : {preference}\n"
         f"Trajet réel : {maps_link}\n"
         f"Annonce : {listing['url']}"
