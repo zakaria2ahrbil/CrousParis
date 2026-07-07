@@ -28,12 +28,9 @@ TOOL_ID = 45  # 2026-2027 campaign. Use 42 for the current year's tool.
 BASE_URL = f"https://trouverunlogement.lescrous.fr/tools/{TOOL_ID}/search"
 
 # All of Île-de-France, so nothing gets filtered out before you see it.
-# IDF_POSTAL_PREFIXES = ["75", "77", "78", "91", "92", "93", "94", "95"]
+IDF_POSTAL_PREFIXES = ["75", "77", "78", "91", "92", "93", "94", "95"]
 
-# MAX_PRICE = 405  # euros/month
-
-IDF_POSTAL_PREFIXES = ["0","1","2","3","4","5","6","7","8","9"]  # matches everything
-MAX_PRICE = None  # no price cap
+MAX_PRICE = 405  # euros/month
 
 CHECK_INTERVAL_SECONDS = 300  # only used in local/loop mode, not GitHub Actions
 
@@ -218,8 +215,13 @@ def build_message(listing) -> str:
 
 def run_once(seen_ids: set) -> set:
     listings = get_all_listings()
+    print(f"[debug] total listings scraped: {len(listings)}")
+    if listings:
+        print(f"[debug] sample listing: {listings[0]}")
     matching = [l for l in listings if matches_criteria(l)]
+    print(f"[debug] listings matching filter: {len(matching)}")
     new_ones = [l for l in matching if l["id"] not in seen_ids]
+    print(f"[debug] new (unseen) matching listings: {len(new_ones)}")
 
     for listing in new_ones:
         msg = build_message(listing)
