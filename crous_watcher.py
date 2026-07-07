@@ -30,7 +30,7 @@ BASE_URL = f"https://trouverunlogement.lescrous.fr/tools/{TOOL_ID}/search"
 # All of Île-de-France, so nothing gets filtered out before you see it.
 IDF_POSTAL_PREFIXES = ["75", "77", "78", "91", "92", "93", "94", "95"]
 
-MAX_PRICE = 405  # euros/month
+MAX_PRICE = 600  # euros/month
 
 CHECK_INTERVAL_SECONDS = 300  # only used in local/loop mode, not GitHub Actions
 
