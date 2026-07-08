@@ -32,11 +32,14 @@ IDF_POSTAL_PREFIXES = ["75", "77", "78", "91", "92", "93", "94", "95"]
 
 MAX_PRICE = None  # no price cap — show everything in IDF, you decide
 
-CHECK_INTERVAL_SECONDS = 300  # only used in local/loop mode, not GitHub Actions
+CHECK_INTERVAL_SECONDS = 60  # only used in local/loop mode, not GitHub Actions
 
 STATE_FILE = Path(os.environ.get("STATE_FILE", "crous_seen_ids.json"))
 HEARTBEAT_FILE = Path(os.environ.get("HEARTBEAT_FILE", "crous_last_heartbeat.txt"))
-HEARTBEAT_INTERVAL_SECONDS = 3600  # send an "I'm alive" ping at most once per hour
+HEARTBEAT_INTERVAL_SECONDS = 3600  # full listing digest, at most once per hour
+
+COUNT_PING_FILE = Path(os.environ.get("COUNT_PING_FILE", "crous_last_count_ping.txt"))
+COUNT_PING_INTERVAL_SECONDS = 600  # quick "X listings match" ping, every 10 min
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "PUT_YOUR_CHAT_ID_HERE")
@@ -246,6 +249,24 @@ def build_message(listing) -> str:
     )
 
 
+def maybe_send_count_ping(matching: list):
+    """Quick 'X listings match' ping every COUNT_PING_INTERVAL_SECONDS,
+    even if the count is zero — separate from the hourly full digest."""
+    now = time.time()
+    last = 0.0
+    if COUNT_PING_FILE.exists():
+        try:
+            last = float(COUNT_PING_FILE.read_text().strip())
+        except ValueError:
+            last = 0.0
+
+    if now - last < COUNT_PING_INTERVAL_SECONDS:
+        return
+
+    send_telegram(f"📊 {len(matching)} logement(s) en Île-de-France correspondent à ton filtre actuellement.")
+    COUNT_PING_FILE.write_text(str(now))
+
+
 def maybe_send_heartbeat(all_listings: list, matching: list):
     """Send a 'still watching' ping at most once per HEARTBEAT_INTERVAL_SECONDS,
     listing current IDF listings first, then a full-France list as a backup view."""
@@ -312,6 +333,7 @@ def run_once(seen_ids: set) -> set:
         send_telegram(msg)
 
     if not new_ones:
+        maybe_send_count_ping(matching)
         maybe_send_heartbeat(listings, matching)
 
     return {l["id"] for l in matching}
