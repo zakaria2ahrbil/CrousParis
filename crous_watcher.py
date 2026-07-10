@@ -35,11 +35,8 @@ MAX_PRICE = None  # no price cap — show everything in IDF, you decide
 CHECK_INTERVAL_SECONDS = 60  # only used in local/loop mode, not GitHub Actions
 
 STATE_FILE = Path(os.environ.get("STATE_FILE", "crous_seen_ids.json"))
-HEARTBEAT_FILE = Path(os.environ.get("HEARTBEAT_FILE", "crous_last_heartbeat.txt"))
-HEARTBEAT_INTERVAL_SECONDS = 3600  # full listing digest, at most once per hour
-
 COUNT_PING_FILE = Path(os.environ.get("COUNT_PING_FILE", "crous_last_count_ping.txt"))
-COUNT_PING_INTERVAL_SECONDS = 600  # quick "X listings match" ping, every 10 min
+COUNT_PING_INTERVAL_SECONDS = 12 * 3600  # quick "X listings match" ping, every 12h
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "PUT_YOUR_CHAT_ID_HERE")
@@ -216,18 +213,17 @@ def save_seen_ids(ids: set):
     STATE_FILE.write_text(json.dumps(sorted(ids)))
 
 
-def send_telegram(message: str):
+def send_telegram(message: str, markdown: bool = False):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "disable_web_page_preview": True,
+    }
+    if markdown:
+        data["parse_mode"] = "Markdown"
     try:
-        requests.post(
-            url,
-            data={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": message,
-                "disable_web_page_preview": True,
-            },
-            timeout=10,
-        )
+        requests.post(url, data=data, timeout=10)
     except requests.RequestException as e:
         print(f"[!] Telegram send failed: {e}", file=sys.stderr)
 
@@ -239,13 +235,15 @@ def build_message(listing) -> str:
         f"&destination={DESTINATION}&travelmode=transit"
     )
     return (
-        f"🏠 Nouveau logement CROUS !\n"
-        f"{listing['name']}\n"
-        f"{listing['address']}\n"
-        f"Prix : {listing['price_text']}\n"
-        f"Préférence : {preference}\n"
-        f"Trajet réel : {maps_link}\n"
-        f"Annonce : {listing['url']}"
+        f"🏠 *Nouveau logement CROUS*\n"
+        f"\n"
+        f"*{listing['name']}*\n"
+        f"💰 {listing['price_text']}\n"
+        f"📍 {listing['address']}\n"
+        f"🚦 {preference}\n"
+        f"\n"
+        f"[🚉 Voir le trajet réel]({maps_link})\n"
+        f"[🔗 Voir l'annonce]({listing['url']})"
     )
 
 
@@ -265,47 +263,6 @@ def maybe_send_count_ping(matching: list):
 
     send_telegram(f"📊 {len(matching)} logement(s) en Île-de-France correspondent à ton filtre actuellement.")
     COUNT_PING_FILE.write_text(str(now))
-
-
-def maybe_send_heartbeat(all_listings: list, matching: list):
-    """Send a 'still watching' ping at most once per HEARTBEAT_INTERVAL_SECONDS,
-    listing current IDF listings first, then a full-France list as a backup view."""
-    now = time.time()
-    last = 0.0
-    if HEARTBEAT_FILE.exists():
-        try:
-            last = float(HEARTBEAT_FILE.read_text().strip())
-        except ValueError:
-            last = 0.0
-
-    if now - last < HEARTBEAT_INTERVAL_SECONDS:
-        return
-
-    lines = ["✅ Bot actif\n"]
-
-    if not matching:
-        lines.append("Île-de-France : aucun logement pour l'instant.\n")
-    else:
-        lines.append(f"Île-de-France ({len(matching)}) :")
-        for l in matching:
-            pref = get_preference(l["postal"])
-            lines.append(f"• {l['name']} — {l['price_text']} — {l['postal']} ({pref})\n  {l['url']}")
-        lines.append("")
-
-    if not all_listings:
-        lines.append("France entière : aucun logement pour l'instant.")
-    else:
-        lines.append(f"France entière ({len(all_listings)}) — liste complète en backup :")
-        for l in all_listings:
-            lines.append(f"• {l['name']} — {l['price_text']} — {l['postal']} ({l['address']})\n  {l['url']}")
-
-    # Telegram messages have a ~4096 char limit — split into chunks if needed
-    full_text = "\n".join(lines)
-    chunk_size = 3800
-    for i in range(0, len(full_text), chunk_size):
-        send_telegram(full_text[i:i + chunk_size])
-
-    HEARTBEAT_FILE.write_text(str(now))
 
 
 def run_once(seen_ids: set) -> set:
@@ -330,11 +287,10 @@ def run_once(seen_ids: set) -> set:
     for listing in new_ones:
         msg = build_message(listing)
         print(msg)
-        send_telegram(msg)
+        send_telegram(msg, markdown=True)
 
     if not new_ones:
         maybe_send_count_ping(matching)
-        maybe_send_heartbeat(listings, matching)
 
     return {l["id"] for l in matching}
 
